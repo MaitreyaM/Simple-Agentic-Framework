@@ -16,14 +16,14 @@ if __name__ == "__main__":
         exit(1)
 
 
-    agent = ReactAgent(tools=duckduckgo_search, model="llama-3.3-70b-versatile")
+    agent = ReactAgent(tools=duckduckgo_search, model="meta-llama/llama-4-maverick-17b-128e-instruct")
 
     # Define user query
-    user_query = "what do react agents do think about it in multiple steps and tell me"
+    user_query = "tell me the working of engine mechanics of bmw m5"
 
    
     response = agent.run(user_msg=user_query) 
     print("THE RESPONSE IS : \n\n")
     print(response)
    
-# --- END OF FILE run_react_agent_example.py ---
+# --- END OF FILE react_test.py ---

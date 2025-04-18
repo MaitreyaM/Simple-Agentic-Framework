@@ -35,4 +35,3 @@ with Team() as team:
 
 team.run() # Executes agents in order and prints each agent's final output
 
-# --- END OF FILE run_minimal_team_example.py ---
