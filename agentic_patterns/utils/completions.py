@@ -1,10 +1,13 @@
-# --- START OF MODIFIED completions.py ---
+# --- START OF ASYNC MODIFIED completions.py ---
 
+import asyncio # Import asyncio for potential future use if needed, although not strictly required by this change
 from typing import Optional, List, Dict, Any # Added Optional, List, Dict, Any
 # Assuming Groq client and specific API response types might be needed
 # from groq import Groq # Already imported elsewhere, ensure available
 # from groq.types.chat.chat_completion import ChatCompletion # Example type hint
 # from groq.types.chat.chat_completion_message import ChatCompletionMessage # Example type hint
+from groq import AsyncGroq
+
 
 # Placeholder type for Groq client if not strictly typed
 GroqClient = Any
@@ -12,18 +15,19 @@ GroqClient = Any
 ChatCompletionMessage = Any
 
 
-def completions_create(
-    client: GroqClient,
+# Changed function definition to async def
+async def completions_create(
+    client: AsyncGroq,
     messages: List[Dict[str, Any]], # Use more specific types if available
     model: str,
     tools: Optional[List[Dict[str, Any]]] = None, # Added tools parameter
     tool_choice: str = "auto" # Added tool_choice parameter ("auto", "none", or {"type": "function", "function": {"name": "my_function"}})
 ) -> ChatCompletionMessage: # Changed return type
     """
-    Sends a request to the client's `completions.create` method, supporting tool use.
+    Sends an asynchronous request to the client's completions endpoint, supporting tool use.
 
     Args:
-        client: The API client object (e.g., Groq).
+        client: The API client object (e.g., Groq) supporting async operations.
         messages: A list of message objects for the chat history.
         model: The model to use.
         tools: A list of tool schemas the model can use.
@@ -42,12 +46,13 @@ def completions_create(
             api_kwargs["tools"] = tools
             api_kwargs["tool_choice"] = tool_choice
 
-        response = client.chat.completions.create(**api_kwargs)
+        # Changed .acreate to .create based on Groq async documentation
+        response = await client.chat.completions.create(**api_kwargs)
         # Return the entire message object from the first choice
         return response.choices[0].message
     except Exception as e:
         # Handle potential API errors
-        print(f"Error calling LLM API: {e}")
+        print(f"Error calling LLM API asynchronously: {e}")
         # Return a custom message or re-raise depending on desired error handling
         # Returning a placeholder error message object might be useful
         class ErrorMessage:
@@ -168,4 +173,4 @@ class FixedFirstChatHistory(ChatHistory):
              super().append(msg)
 
 
-# --- END OF MODIFIED completions.py ---
+# --- END OF ASYNC MODIFIED completions.py ---

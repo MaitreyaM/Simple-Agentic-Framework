@@ -1,9 +1,14 @@
-# --- START OF MODIFIED agent.py ---
+# --- START OF MODIFIED agent.py (Circular Import Fix) ---
 
+import asyncio
+import json # Import json for create_prompt formatting
 from textwrap import dedent
-from typing import Any # Import Any
+from typing import Any, List, Optional
 
-from agentic_patterns.multiagent_pattern.team import Team
+# REMOVE this top-level import:
+# from agentic_patterns.multiagent_pattern.team import Team
+
+# Keep these imports
 from agentic_patterns.react_pattern.react_agent import ReactAgent
 from agentic_patterns.tool_pattern.tool import Tool
 
@@ -11,27 +16,7 @@ from agentic_patterns.tool_pattern.tool import Tool
 class Agent:
     """
     Represents an AI agent that can work as part of a team to complete tasks.
-
-    This class implements an agent with dependencies, context handling, and task execution capabilities.
-    It can be used in a multi-agent system where agents collaborate to solve complex problems.
-
-    Attributes:
-        name (str): The name of the agent.
-        backstory (str): The backstory or background of the agent.
-        task_description (str): A description of the task assigned to the agent.
-        task_expected_output (str): The expected format or content of the task output.
-        react_agent (ReactAgent): An instance of ReactAgent used for generating responses.
-        dependencies (list[Agent]): A list of Agent instances that this agent depends on.
-        dependents (list[Agent]): A list of Agent instances that depend on this agent.
-        received_context (dict[str, Any]): Accumulated structured context from dependency agents.
-
-    Args:
-        name (str): The name of the agent.
-        backstory (str): The backstory or background of the agent.
-        task_description (str): A description of the task assigned to the agent.
-        task_expected_output (str, optional): The expected format or content of the task output. Defaults to "".
-        tools (list[Tool] | None, optional): A list of Tool instances available to the agent. Defaults to None.
-        llm (str, optional): The name of the language model to use. Defaults to "llama-3.3-70b-versatile".
+    ... (rest of docstring) ...
     """
 
     def __init__(
@@ -40,7 +25,7 @@ class Agent:
         backstory: str,
         task_description: str,
         task_expected_output: str = "",
-        tools: list[Tool] | None = None,
+        tools: Optional[List[Tool]] = None,
         llm: str = "llama-3.3-70b-versatile",
     ):
         self.name = name
@@ -48,59 +33,77 @@ class Agent:
         self.task_description = task_description
         self.task_expected_output = task_expected_output
         self.react_agent = ReactAgent(
-            model=llm, system_prompt=self.backstory, tools=tools or []
+            model=llm, system_prompt=self.backstory, tools=tools # Pass tools correctly
         )
 
-        self.dependencies: list[Agent] = []
-        self.dependents: list[Agent] = []
+        # Use string literal for Agent type hint to avoid needing Agent import at top level in team.py
+        self.dependencies: List['Agent'] = []
+        self.dependents: List['Agent'] = []
 
-        # Changed from self.context = "" to a dictionary
         self.received_context: dict[str, Any] = {}
 
+        # Import Team *inside* the method, right before use
+        from agentic_patterns.multiagent_pattern.team import Team
         Team.register_agent(self)
 
     def __repr__(self):
         return f"{self.name}"
 
-    def __rshift__(self, other):
+    # Type hint 'Agent' as string literal
+    def __rshift__(self, other: 'Agent') -> 'Agent':
         self.add_dependent(other)
         return other
 
-    def __lshift__(self, other):
+    # Type hint 'Agent' as string literal
+    def __lshift__(self, other: 'Agent') -> 'Agent':
         self.add_dependency(other)
         return other
 
-    def __rrshift__(self, other):
+    # Type hint 'Agent' as string literal
+    def __rrshift__(self, other: List['Agent'] | 'Agent'):
         self.add_dependency(other)
         return self
 
-    def __rlshift__(self, other):
+    # Type hint 'Agent' as string literal
+    def __rlshift__(self, other: List['Agent'] | 'Agent'):
         self.add_dependent(other)
         return self
 
-    def add_dependency(self, other):
-        if isinstance(other, Agent):
-            self.dependencies.append(other)
-            other.dependents.append(self)
-        elif isinstance(other, list) and all(isinstance(item, Agent) for item in other):
+    # Type hint 'Agent' as string literal
+    def add_dependency(self, other: 'Agent' | List['Agent']):
+        # Check type without importing Agent directly at top level
+        AgentClass = type(self)
+        if isinstance(other, AgentClass):
+            if other not in self.dependencies:
+                self.dependencies.append(other)
+            if self not in other.dependents:
+                other.dependents.append(self)
+        elif isinstance(other, list) and all(isinstance(item, AgentClass) for item in other):
             for item in other:
-                self.dependencies.append(item)
-                item.dependents.append(self)
+                 if item not in self.dependencies:
+                     self.dependencies.append(item)
+                 if self not in item.dependents:
+                     item.dependents.append(self)
         else:
             raise TypeError("The dependency must be an instance or list of Agent.")
 
-    def add_dependent(self, other):
-        if isinstance(other, Agent):
-            other.dependencies.append(self)
-            self.dependents.append(other)
-        elif isinstance(other, list) and all(isinstance(item, Agent) for item in other):
+    # Type hint 'Agent' as string literal
+    def add_dependent(self, other: 'Agent' | List['Agent']):
+        AgentClass = type(self)
+        if isinstance(other, AgentClass):
+            if self not in other.dependencies:
+                other.dependencies.append(self)
+            if other not in self.dependents:
+                self.dependents.append(other)
+        elif isinstance(other, list) and all(isinstance(item, AgentClass) for item in other):
             for item in other:
-                item.dependencies.append(self)
-                self.dependents.append(item)
+                if self not in item.dependencies:
+                     item.dependencies.append(self)
+                if item not in self.dependents:
+                     self.dependents.append(item)
         else:
             raise TypeError("The dependent must be an instance or list of Agent.")
 
-    # Modified to accept structured data and store it keyed by the sender agent's name
     def receive_context(self, sender_name: str, input_data: Any):
         """
         Receives and stores structured context information from a specific dependency agent.
@@ -111,9 +114,7 @@ class Agent:
         """
         self.received_context[sender_name] = input_data
 
-
-    # Modified to format the structured context
-    def create_prompt(self):
+    def create_prompt(self) -> str:
         """
         Creates a prompt for the agent based on its task description, expected output,
         and formatted context from dependencies.
@@ -121,66 +122,55 @@ class Agent:
         Returns:
             str: The formatted prompt string.
         """
-        # Format the received context dictionary into a string
-        context_str = "\n".join(
-            f"Context from {name}:\n{str(data)}\n---"
+        context_str = "\n---\n".join(
+            f"Context from {name}:\n{json.dumps(data, indent=2) if isinstance(data, dict) else str(data)}"
             for name, data in self.received_context.items()
         )
         if not context_str:
             context_str = "No context received from other agents."
 
-
         prompt = dedent(
             f"""
-        You are an AI agent. You are part of a team of agents working together to complete a task.
-        I'm going to give you the task description enclosed in <task_description></task_description> tags. I'll also give
-        you the available context from the other agents in <context></context> tags. If the context
-        is not available, the <context></context> tags will be empty or indicate no context was received. You'll also receive the task
-        expected output enclosed in <task_expected_output></task_expected_output> tags. With all this information
-        you need to create the best possible response, always respecting the format as describe in
-        <task_expected_output></task_expected_output> tags. If expected output is not available, just create
-        a meaningful response to complete the task.
+        You are an AI agent named {self.name}. Your backstory: {self.backstory}
+        You are part of a team of agents working together to complete a task.
+        Your immediate task is described below. Use the provided context from other agents if relevant.
 
         <task_description>
         {self.task_description}
         </task_description>
 
         <task_expected_output>
-        {self.task_expected_output}
+        {self.task_expected_output or 'Produce a meaningful response to complete the task.'}
         </task_expected_output>
 
         <context>
         {context_str}
         </context>
 
-        Your response:
+        Now, execute your task based on the description, context, and expected output. Your response:
         """
         ).strip()
 
         return prompt
 
-    # Modified to return a dictionary and pass structured context
-    def run(self) -> dict[str, Any]:
+    async def run(self) -> dict[str, Any]:
         """
-        Runs the agent's task and generates the output as a dictionary.
+        Runs the agent's task asynchronously and generates the output as a dictionary.
 
-        This method creates a prompt, runs it through the ReactAgent, wraps the output
-        in a dictionary, and passes this dictionary to all dependent agents.
+        This method creates a prompt, runs it through the ReactAgent asynchronously,
+        wraps the output in a dictionary, and passes this dictionary to all dependent agents.
 
         Returns:
             dict[str, Any]: A dictionary containing the agent's output (e.g., {'output': 'result text'}).
         """
         msg = self.create_prompt()
-        raw_output = self.react_agent.run(user_msg=msg)
+        raw_output = await self.react_agent.run(user_msg=msg)
 
-        # Wrap the output in a standard dictionary structure
         output_data = {"output": raw_output}
 
-        # Pass the structured output to all dependents
         for dependent in self.dependents:
-            # Pass the sender's name along with the data
             dependent.receive_context(self.name, output_data)
 
         return output_data
 
-# --- END OF MODIFIED agent.py ---
+# --- END OF MODIFIED agent.py (Circular Import Fix) ---

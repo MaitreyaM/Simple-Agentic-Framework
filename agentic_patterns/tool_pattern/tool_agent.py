@@ -1,20 +1,20 @@
-# --- START OF REFACTORED tool_agent.py ---
+# --- START OF ASYNC MODIFIED tool_agent.py ---
 
 import json
 from typing import List, Dict, Any, Optional
+import asyncio # Import asyncio
 
 from colorama import Fore
 from dotenv import load_dotenv
-from groq import Groq
+# Import AsyncGroq instead of Groq
+from groq import AsyncGroq
 
 from agentic_patterns.tool_pattern.tool import Tool
-# No longer need validate_arguments here if Tool.run handles it
 from agentic_patterns.utils.completions import build_prompt_structure
 from agentic_patterns.utils.completions import ChatHistory
+# Import the async version of completions_create
 from agentic_patterns.utils.completions import completions_create
 from agentic_patterns.utils.completions import update_chat_history
-# No longer need extract_tag_content
-# from agentic_patterns.utils.extraction import extract_tag_content
 
 load_dotenv()
 
@@ -26,7 +26,7 @@ If you use a tool, you will be given the results, and then you should provide th
 
 class ToolAgent:
     """
-    A simple agent that uses native tool calling to answer user queries.
+    A simple agent that uses native tool calling asynchronously to answer user queries.
     It makes one attempt to call tools if needed, processes the results,
     and then generates a final response.
     """
@@ -34,21 +34,21 @@ class ToolAgent:
     def __init__(
         self,
         tools: Tool | list[Tool],
-        model: str = "llama-3.3-70b-versatile", # Changed default model
+        model: str = "llama-3.3-70b-versatile",
         system_prompt: str = NATIVE_TOOL_SYSTEM_PROMPT,
     ) -> None:
-        self.client = Groq()
+        # Use AsyncGroq for asynchronous operations
+        self.client = AsyncGroq()
         self.model = model
-        self.system_prompt = system_prompt # Use the provided or default system prompt
+        self.system_prompt = system_prompt
         self.tools = tools if isinstance(tools, list) else [tools]
         self.tools_dict = {tool.name: tool for tool in self.tools}
-        self.tool_schemas = [tool.fn_schema for tool in self.tools] # Store schemas
+        self.tool_schemas = [tool.fn_schema for tool in self.tools]
 
-    # Removed add_tool_signatures method
-
-    def process_tool_calls(self, tool_calls: List[Any]) -> List[Dict[str, Any]]:
+    # Changed to async def
+    async def process_tool_calls(self, tool_calls: List[Any]) -> List[Dict[str, Any]]:
         """
-        Processes tool calls requested by the LLM, executes the tools,
+        Processes tool calls requested by the LLM asynchronously, executes the tools,
         and collects results formatted as 'tool' role messages for the chat history.
 
         Args:
@@ -63,19 +63,22 @@ class ToolAgent:
              print(Fore.RED + f"Error: Expected a list of tool_calls, got {type(tool_calls)}")
              return observation_messages
 
+        # Consider using asyncio.gather here if concurrent tool execution is desired
         for tool_call in tool_calls:
-            if not hasattr(tool_call, 'id') or not hasattr(tool_call, 'function'):
-                 print(Fore.YELLOW + f"Warning: Skipping invalid tool call object: {tool_call}")
-                 continue
-
-            tool_call_id = tool_call.id
-            function_call = tool_call.function
-            tool_name = function_call.name
-            result_str = f"Error: Tool '{tool_name}' processing failed." # Default error message
+            tool_call_id = "error_no_id"
+            tool_name = "error_unknown_name"
+            result_str = f"Error: Tool '{tool_name}' processing failed."
 
             try:
+                if not hasattr(tool_call, 'id') or not hasattr(tool_call, 'function'):
+                     print(Fore.YELLOW + f"Warning: Skipping invalid tool call object: {tool_call}")
+                     continue
+
+                tool_call_id = tool_call.id
+                function_call = tool_call.function
+                tool_name = function_call.name
                 arguments_str = function_call.arguments
-                arguments = json.loads(arguments_str)
+                arguments = json.loads(arguments_str) # JSON parsing remains sync
 
                 if tool_name not in self.tools_dict:
                     print(Fore.RED + f"Error: Tool '{tool_name}' not found.")
@@ -86,17 +89,18 @@ class ToolAgent:
                     print(Fore.GREEN + f"Tool call ID: {tool_call_id}")
                     print(Fore.GREEN + f"Arguments: {arguments}")
 
-                    # Execute the tool using its run method (which includes validation)
+                    # Execute the tool using its async run method
                     try:
-                        result = tool.run(**arguments)
-                        # Ensure result is serializable
+                        # Use await as Tool.run is now async
+                        result = await tool.run(**arguments)
+                        # Ensure result is serializable (sync processing)
                         if not isinstance(result, (str, int, float, bool, list, dict, type(None))):
                             result_str = str(result)
                         else:
                             try:
-                                result_str = json.dumps(result) # Prefer JSON string representation
+                                result_str = json.dumps(result)
                             except TypeError:
-                                result_str = str(result) # Fallback to string
+                                result_str = str(result)
                         print(Fore.GREEN + f"\nTool result: \n{result_str}")
 
                     except Exception as e:
@@ -110,19 +114,20 @@ class ToolAgent:
                 print(Fore.RED + f"Error processing tool call arguments for {tool_name}: {e}")
                 # Keep default error message
 
-            # Create the message dictionary for this observation
             observation_messages.append(
                 build_prompt_structure(role="tool", content=result_str, tool_call_id=tool_call_id)
             )
 
         return observation_messages
 
-    def run(
+    # Changed to async def
+    async def run(
         self,
         user_msg: str,
     ) -> str:
         """
-        Handles the interaction: user message -> LLM (tool decision) -> execute tools -> LLM (final response).
+        Handles the asynchronous interaction: user message -> LLM (tool decision) ->
+        execute tools -> LLM (final response).
 
         Args:
             user_msg (str): The user's message.
@@ -140,53 +145,48 @@ class ToolAgent:
         )
 
         print(Fore.CYAN + "\n--- Calling LLM for Tool Decision ---")
-        # First call to LLM to decide if tools are needed
-        assistant_message_1 = completions_create(
+        # Use await for the async completions_create call
+        assistant_message_1 = await completions_create(
             self.client,
             messages=list(chat_history),
             model=self.model,
-            tools=self.tool_schemas, # Provide tool schemas
-            tool_choice="auto"       # Let model decide
+            tools=self.tool_schemas,
+            tool_choice="auto"
         )
 
-        # Add assistant's first response (which might contain tool calls) to history
+        # Synchronous update
         update_chat_history(chat_history, assistant_message_1)
 
-        final_response = "Agent encountered an issue." # Default
+        final_response = "Agent encountered an issue."
 
         # Check if tools were called
         if hasattr(assistant_message_1, 'tool_calls') and assistant_message_1.tool_calls:
             print(Fore.YELLOW + "\nAssistant requests tool calls:")
-            # Process tool calls and get observation messages
-            observation_messages = self.process_tool_calls(assistant_message_1.tool_calls)
-            print(Fore.BLUE + f"\nObservations prepared for LLM: {observation_messages}") # Show observations being sent back
+            # Use await for the async process_tool_calls
+            observation_messages = await self.process_tool_calls(assistant_message_1.tool_calls)
+            print(Fore.BLUE + f"\nObservations prepared for LLM: {observation_messages}")
 
-            # Add observation messages to history
+            # Synchronous loop and update
             for obs_msg in observation_messages:
                 update_chat_history(chat_history, obs_msg)
 
             print(Fore.CYAN + "\n--- Calling LLM for Final Response ---")
-            # Second call to LLM for the final response based on observations
-            assistant_message_2 = completions_create(
+            # Use await for the async completions_create call
+            assistant_message_2 = await completions_create(
                 self.client,
                 messages=list(chat_history),
                 model=self.model,
-                # No tools needed for the final response generation
-                # tools=None,
-                # tool_choice="none" # Optional: explicitly prevent tool use here
             )
             final_response = str(assistant_message_2.content) if assistant_message_2.content else "Agent did not provide a final response after using tools."
 
         elif assistant_message_1.content is not None:
-            # If no tool calls were made, the first response is the final response
             print(Fore.CYAN + "\nAssistant provided direct response (no tools used):")
             final_response = assistant_message_1.content
         else:
-            # Handle unexpected case: no tool calls and no content
             print(Fore.RED + "Error: Assistant message has neither content nor tool calls.")
             final_response = "Error: Received an unexpected empty response from the assistant."
 
         print(Fore.GREEN + f"\nFinal Response:\n{final_response}")
         return final_response
 
-# --- END OF REFACTORED tool_agent.py ---
+# --- END OF ASYNC MODIFIED tool_agent.py ---

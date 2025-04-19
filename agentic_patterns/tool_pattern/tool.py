@@ -1,7 +1,12 @@
-# --- START OF MODIFIED tool.py ---
+# --- START OF ASYNC CORRECTED tool.py ---
 
 import json
-from typing import Callable, Any # Added Any
+import inspect
+import functools # Import functools
+from typing import Callable, Any
+import anyio
+
+# ... (get_fn_signature and validate_arguments remain the same) ...
 
 def get_fn_signature(fn: Callable) -> dict:
     """
@@ -128,32 +133,31 @@ def validate_arguments(tool_call_args: dict, tool_schema: dict) -> dict:
 
     return validated_args
 
-
 class Tool:
     """
     A class representing a tool that wraps a callable and its schema.
+    Handles both synchronous and asynchronous functions.
 
     Attributes:
         name (str): The name of the tool (function).
-        fn (Callable): The function that the tool represents.
+        fn (Callable): The function that the tool represents (can be sync or async).
         fn_schema (dict): Dictionary representing the function's schema in JSON Schema format.
         fn_signature (str): JSON string representation of the function's signature (legacy, kept for potential compatibility).
     """
 
-    def __init__(self, name: str, fn: Callable, fn_schema: dict): # Added fn_schema
+    def __init__(self, name: str, fn: Callable, fn_schema: dict):
         self.name = name
         self.fn = fn
-        self.fn_schema = fn_schema # Store the schema dictionary
-        # Keep the string version for now if needed elsewhere, though ideally phase out
+        self.fn_schema = fn_schema
         self.fn_signature = json.dumps(fn_schema)
 
     def __str__(self):
-        # Return the schema string representation
         return json.dumps(self.fn_schema, indent=2)
 
-    def run(self, **kwargs):
+    async def run(self, **kwargs) -> Any:
         """
-        Executes the tool (function) with provided arguments.
+        Executes the tool (function) with provided arguments asynchronously.
+        Handles both sync and async tool functions appropriately.
 
         Args:
             **kwargs: Keyword arguments passed to the function.
@@ -161,14 +165,19 @@ class Tool:
         Returns:
             The result of the function call.
         """
-        # Consider adding validation here using self.fn_schema before calling self.fn
         try:
             validated_kwargs = validate_arguments(kwargs, self.fn_schema)
-            return self.fn(**validated_kwargs)
+
+            if inspect.iscoroutinefunction(self.fn):
+                return await self.fn(**validated_kwargs)
+            else:
+                # Corrected: Use functools.partial to pass kwargs to the sync function
+                # run in the thread pool.
+                func_with_args = functools.partial(self.fn, **validated_kwargs)
+                return await anyio.to_thread.run_sync(func_with_args)
+
         except ValueError as e:
-             # Handle validation errors appropriately
              print(f"Argument validation failed for tool {self.name}: {e}")
-             # Return an error message or raise the exception depending on desired behavior
              return f"Error: {e}"
         except Exception as e:
              print(f"Error executing tool {self.name}: {e}")
@@ -177,7 +186,8 @@ class Tool:
 
 def tool(fn: Callable):
     """
-    A decorator that wraps a function into a Tool object, including its JSON schema.
+    A decorator that wraps a function (sync or async) into a Tool object,
+    including its JSON schema.
 
     Args:
         fn (Callable): The function to be wrapped.
@@ -187,16 +197,15 @@ def tool(fn: Callable):
     """
 
     def wrapper():
-        fn_schema = get_fn_signature(fn) # Get the schema dictionary
-        # Ensure the schema is valid before creating the Tool object
+        fn_schema = get_fn_signature(fn)
         if not fn_schema or 'function' not in fn_schema or 'name' not in fn_schema['function']:
              raise ValueError(f"Could not generate valid schema for function {fn.__name__}")
         return Tool(
-            name=fn_schema["function"]["name"], # Get name from schema
+            name=fn_schema["function"]["name"],
             fn=fn,
-            fn_schema=fn_schema # Pass the schema dictionary
+            fn_schema=fn_schema
         )
 
     return wrapper()
 
-# --- END OF MODIFIED tool.py ---
+# --- END OF ASYNC CORRECTED tool.py ---

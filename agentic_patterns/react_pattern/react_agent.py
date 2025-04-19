@@ -1,20 +1,21 @@
-# --- START OF MODIFIED react_agent.py ---
+# --- START OF ASYNC CORRECTED react_agent.py ---
 
 import json
 import re
 from typing import List, Dict, Any, Optional
+import asyncio
 
 from colorama import Fore
 from dotenv import load_dotenv
-from groq import Groq
+# Import AsyncGroq instead of Groq
+from groq import AsyncGroq
 
 from agentic_patterns.tool_pattern.tool import Tool
 from agentic_patterns.utils.completions import build_prompt_structure
 from agentic_patterns.utils.completions import ChatHistory
+# Ensure this function uses await client.chat.completions.create
 from agentic_patterns.utils.completions import completions_create
 from agentic_patterns.utils.completions import update_chat_history
-# Remove extract_tag_content if no longer needed for other tags
-# from agentic_patterns.utils.extraction import extract_tag_content
 
 load_dotenv()
 
@@ -51,10 +52,10 @@ class ReactAgent:
     """
     A class that represents an agent using the ReAct logic with native tool calling.
     It interacts with tools via structured API calls, processes user inputs, makes decisions,
-    and executes tool calls.
+    and executes tool calls asynchronously.
 
     Attributes:
-        client (Groq): The Groq client used to handle model-based completions.
+        client (AsyncGroq): The AsyncGroq client used for async model completions.
         model (str): The name of the model used for generating responses.
         tools (list[Tool]): A list of Tool instances available for execution.
         tools_dict (dict): A dictionary mapping tool names to their corresponding Tool instances.
@@ -68,7 +69,7 @@ class ReactAgent:
         model: str = "llama-3.3-70b-versatile",
         system_prompt: str = "",
     ) -> None:
-        self.client = Groq()
+        self.client = AsyncGroq()
         self.model = model
         # Combine provided system prompt with the modified core instructions
         self.system_prompt = (system_prompt + "\n\n" + CORE_SYSTEM_PROMPT).strip() # Uses the updated CORE_SYSTEM_PROMPT
@@ -81,82 +82,104 @@ class ReactAgent:
         self.tools_dict = {tool.name: tool for tool in self.tools}
         self.tool_schemas = [tool.fn_schema for tool in self.tools]
 
-    def process_tool_calls(self, tool_calls: List[Any]) -> dict:
+    async def process_tool_calls(self, tool_calls: List[Any]) -> dict:
+        """
+        Processes tool calls requested by the LLM asynchronously, executes the tools,
+        and collects results.
+
+        Args:
+            tool_calls (list): List of tool call objects from the LLM API response.
+
+        Returns:
+            dict: A dictionary where keys are tool call IDs and values are the results from the tools.
+        """
         observations = {}
         if not isinstance(tool_calls, list):
              print(Fore.RED + f"Error: Expected a list of tool_calls, got {type(tool_calls)}")
              return observations
 
         for tool_call in tool_calls:
-            if not hasattr(tool_call, 'id') or not hasattr(tool_call, 'function'):
-                 print(Fore.YELLOW + f"Warning: Skipping invalid tool call object: {tool_call}")
-                 continue
+            tool_call_id = "error_no_id" # Default in case parsing fails early
+            tool_name = "error_unknown_name"
+            result_str = "Error: Tool processing failed before execution."
 
-            tool_call_id = tool_call.id
-            function_call = tool_call.function
-            tool_name = function_call.name
             try:
+                if not hasattr(tool_call, 'id') or not hasattr(tool_call, 'function'):
+                     print(Fore.YELLOW + f"Warning: Skipping invalid tool call object: {tool_call}")
+                     continue
+
+                tool_call_id = tool_call.id
+                function_call = tool_call.function
+                tool_name = function_call.name
                 arguments_str = function_call.arguments
                 arguments = json.loads(arguments_str)
+
+                if tool_name not in self.tools_dict:
+                    print(Fore.RED + f"Error: Tool '{tool_name}' not found.")
+                    result_str = f"Error: Tool '{tool_name}' is not available."
+                else:
+                    tool = self.tools_dict[tool_name]
+                    print(Fore.GREEN + f"\nUsing Tool: {tool_name}")
+                    print(Fore.GREEN + f"Tool call ID: {tool_call_id}")
+                    print(Fore.GREEN + f"Arguments: {arguments}")
+
+                    # Await the tool run, which now handles sync/async internally
+                    result = await tool.run(**arguments)
+
+                    if not isinstance(result, (str, int, float, bool, list, dict, type(None))):
+                        result_str = str(result)
+                    else:
+                        try:
+                            result_str = json.dumps(result)
+                        except TypeError:
+                            result_str = str(result)
+
+                    print(Fore.GREEN + f"Tool result: {result_str}")
+
             except json.JSONDecodeError:
                 print(Fore.RED + f"Error: Could not decode arguments for tool {tool_name}: {arguments_str}")
-                observations[tool_call_id] = f"Error: Invalid arguments JSON provided for {tool_name}"
-                continue
+                result_str = f"Error: Invalid arguments JSON provided for {tool_name}"
             except Exception as e:
-                print(Fore.RED + f"Error processing arguments for tool {tool_name}: {e}")
-                observations[tool_call_id] = f"Error: Could not process arguments for {tool_name}"
-                continue
-
-            if tool_name not in self.tools_dict:
-                print(Fore.RED + f"Error: Tool '{tool_name}' not found.")
-                observations[tool_call_id] = f"Error: Tool '{tool_name}' is not available."
-                continue
-
-            tool = self.tools_dict[tool_name]
-            print(Fore.GREEN + f"\nUsing Tool: {tool_name}")
-            print(Fore.GREEN + f"Tool call ID: {tool_call_id}")
-            print(Fore.GREEN + f"Arguments: {arguments}")
-
-            try:
-                 result = tool.run(**arguments)
-                 if not isinstance(result, (str, int, float, bool, list, dict, type(None))):
-                     result_str = str(result)
-                 else:
-                     try:
-                          result_str = json.dumps(result)
-                     except TypeError:
-                          result_str = str(result)
-            except Exception as e:
-                 print(Fore.RED + f"Error running tool {tool_name}: {e}")
+                 print(Fore.RED + f"Error processing or running tool {tool_name} (id: {tool_call_id}): {e}")
                  result_str = f"Error executing tool {tool_name}: {e}"
 
-            print(Fore.GREEN + f"Tool result: {result_str}")
             observations[tool_call_id] = result_str
 
         return observations
 
-    def run(
+    async def run(
         self,
         user_msg: str,
         max_rounds: int = 5,
     ) -> str:
+        """
+        Executes an asynchronous user interaction session using native tool calling.
+
+        Args:
+            user_msg (str): The user's input message.
+            max_rounds (int): Maximum number of LLM call rounds.
+
+        Returns:
+            str: The final response generated by the agent.
+        """
         initial_user_message = build_prompt_structure(role="user", content=user_msg)
 
         chat_history = ChatHistory(
             [
-                build_prompt_structure(role="system", content=self.system_prompt), # Ensure self.system_prompt uses the new CORE_SYSTEM_PROMPT
+                build_prompt_structure(role="system", content=self.system_prompt),
                 initial_user_message,
             ]
         )
 
-        final_response = "Agent failed to produce a response." # Default value
+        final_response = "Agent failed to produce a response."
 
         for round_num in range(max_rounds):
             print(Fore.CYAN + f"\n--- Round {round_num + 1} ---")
             current_tools = self.tool_schemas if self.tools else None
             current_tool_choice = "auto" if self.tools else "none"
 
-            assistant_message = completions_create(
+            # Use await for the async completions_create call
+            assistant_message = await completions_create(
                 self.client,
                 messages=list(chat_history),
                 model=self.model,
@@ -164,10 +187,8 @@ class ReactAgent:
                 tool_choice=current_tool_choice
             )
 
-            # --- Thought Extraction and Printing (Prefix Method) ---
             assistant_content = None
             extracted_thought = None
-            # Variable to store content potentially identified as final response
             potential_final_response = None
 
             if hasattr(assistant_message, 'content') and assistant_message.content is not None:
@@ -182,25 +203,20 @@ class ReactAgent:
                     stripped_line = line.strip()
                     if stripped_line.startswith("Thought:"):
                         in_thought = True
-                        in_response = False # Cannot be in both
-                        # Capture the rest of the line after "Thought:"
+                        in_response = False
                         thought_content = stripped_line[len("Thought:"):].strip()
-                        if thought_content: # Add if not empty
+                        if thought_content:
                              thought_lines.append(thought_content)
                     elif stripped_line.startswith("Final Response:"):
                          in_response = True
-                         in_thought = False # Cannot be in both
-                         # Capture the rest of the line after "Final Response:"
+                         in_thought = False
                          response_content = stripped_line[len("Final Response:"):].strip()
-                         if response_content: # Add if not empty
+                         if response_content:
                               response_lines.append(response_content)
                     elif in_thought:
-                         # Continue capturing multi-line thought
-                         thought_lines.append(line) # Keep original indentation/spacing
+                         thought_lines.append(line)
                     elif in_response:
-                         # Continue capturing multi-line response
-                         response_lines.append(line) # Keep original indentation/spacing
-                    # Lines before the first marker or between markers might be ignored or handled differently if needed
+                         response_lines.append(line)
 
                  if thought_lines:
                      extracted_thought = "\n".join(thought_lines).strip()
@@ -209,18 +225,14 @@ class ReactAgent:
                  if response_lines:
                       potential_final_response = "\n".join(response_lines).strip()
 
-
-            # --- Update History ---
-            # Add the original assistant message (potentially including prefixes) to history
             update_chat_history(chat_history, assistant_message)
 
-            # --- Process Tool Calls or Identify Final Response ---
             has_tool_calls = hasattr(assistant_message, 'tool_calls') and assistant_message.tool_calls
 
             if has_tool_calls:
-                # If thought was extracted, it's already printed. LLM decided on tool call.
                 print(Fore.YELLOW + "\nAssistant requests tool calls:")
-                observations = self.process_tool_calls(assistant_message.tool_calls)
+                # Use await for the async process_tool_calls
+                observations = await self.process_tool_calls(assistant_message.tool_calls)
                 print(Fore.BLUE + f"\nObservations: {observations}")
 
                 for tool_call in assistant_message.tool_calls:
@@ -229,37 +241,30 @@ class ReactAgent:
                      tool_message = build_prompt_structure(role="tool", content=str(result), tool_call_id=tool_call_id)
                      update_chat_history(chat_history, tool_message)
 
-            # Check for final response: If the content had "Final Response:" AND no tool calls were made
             elif potential_final_response is not None:
                 print(Fore.CYAN + "\nAssistant provides final response:")
                 final_response = potential_final_response
                 print(Fore.GREEN + final_response)
-                return final_response # Exit loop and return the final response
+                return final_response
 
-            # Handle case where there was content, but no "Final Response:" prefix and no tool call
-            # Could be an error, or maybe the LLM just output text without the prefix.
             elif assistant_content is not None and not has_tool_calls:
                  print(Fore.YELLOW + "\nAssistant provided content without 'Final Response:' prefix and no tool calls.")
-                 # Decide how to handle this: return the raw content, or consider it an error?
-                 # Returning raw content might be safer initially.
-                 final_response = assistant_content # Return the raw content
+                 final_response = assistant_content
                  print(Fore.GREEN + final_response)
                  return final_response
 
 
             elif not has_tool_calls and assistant_content is None:
-                 # Handles cases like API errors returning minimal message objects
                  print(Fore.RED + "Error: Assistant message has neither content nor tool calls.")
                  final_response = "Error: Received an unexpected empty or invalid response from the assistant."
-                 return final_response # Exit loop on error
+                 return final_response
 
 
         print(Fore.YELLOW + f"\nMaximum rounds ({max_rounds}) reached.")
-        # If loop finishes, check if the last assistant message could be interpreted as a final response
         if potential_final_response and not has_tool_calls:
             final_response = potential_final_response
             print(Fore.GREEN + f"(Last response from agent): {final_response}")
-        elif assistant_content and not has_tool_calls: # Fallback to last content if no prefix found
+        elif assistant_content and not has_tool_calls:
              final_response = assistant_content
              print(Fore.GREEN + f"(Last raw content from agent): {final_response}")
         else:
@@ -268,4 +273,4 @@ class ReactAgent:
 
         return final_response
 
-# --- END OF MODIFIED react_agent.py ---
+# --- END OF ASYNC CORRECTED react_agent.py ---
