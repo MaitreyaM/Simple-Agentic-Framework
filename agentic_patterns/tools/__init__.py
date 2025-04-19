@@ -1,2 +1,2 @@
 
-from .web_search import brave_search,duckduckgo_search
+from .web_search import duckduckgo_search

@@ -1,26 +1,8 @@
 import os
-from brave import Brave
 from duckduckgo_search import DDGS
 from ..tool_pattern.tool import tool
 
-@tool
-def brave_search(query: str, num_results: int = 5) -> str:
-    """
-    Performs a web search using the Brave Search API.
 
-    Args:
-        query (str): The search query string.
-        num_results (int): The desired number of search results (default is 5).
-
-    Returns:
-        str: A string representation of the search results, or an error message.
-    """
-    try:
-        brave = Brave()
-        search_results = brave.search(q=query, count=num_results)
-        return str(search_results)
-    except Exception as e:
-        return f"Error during Brave web search for '{query}': {e}"
 
 @tool
 def duckduckgo_search(query: str, num_results: int = 5) -> str:

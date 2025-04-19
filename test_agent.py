@@ -1,4 +1,3 @@
-# --- START OF MODIFIED test_agent.py ---
 
 import os
 import asyncio # Import asyncio
